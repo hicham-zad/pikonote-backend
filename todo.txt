@@ -1,0 +1,7 @@
+1. Set up user login/SignUp and test it: done
+2. Set up voting feature and test it
+3. Test the groups functionality: done
+4. Test the user preferences functionality
+5. Create hooks and connect them to the frontend
+6. Add welcome setup with preferences form for new users
+7. Test the complete app and user flow
