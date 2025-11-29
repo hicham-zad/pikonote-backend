@@ -6,6 +6,7 @@ import topicRoutes from './routes/topicRoutes.js';
 import youtubeRoutes from './routes/youtubeRoutes.js';
 import pdfRoutes from './routes/pdfRoutes.js';
 import folderRoutes from './routes/folderRoutes.js';
+import webhookRoutes from './routes/webhookRoutes.js';
 
 dotenv.config();
 
@@ -27,6 +28,7 @@ app.use('/api/pdf', pdfRoutes);
 app.use('/api/youtube/', youtubeRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/folders', folderRoutes);
+app.use('/api/webhooks', webhookRoutes);
 app.use('/api', topicRoutes);
 
 
