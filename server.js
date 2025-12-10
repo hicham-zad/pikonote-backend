@@ -7,6 +7,7 @@ import youtubeRoutes from './routes/youtubeRoutes.js';
 import pdfRoutes from './routes/pdfRoutes.js';
 import folderRoutes from './routes/folderRoutes.js';
 import webhookRoutes from './routes/webhookRoutes.js';
+import userRoutes from './routes/userRoutes.js';
 
 dotenv.config();
 
@@ -24,11 +25,12 @@ app.use((req, res, next) => {
 });
 
 // Routes
+app.use('/api/webhooks', webhookRoutes);
 app.use('/api/pdf', pdfRoutes);
 app.use('/api/youtube/', youtubeRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/folders', folderRoutes);
-app.use('/api/webhooks', webhookRoutes);
+app.use('/api/users', userRoutes);
 app.use('/api', topicRoutes);
 
 
@@ -55,7 +57,7 @@ app.use((err, req, res, next) => {
   });
 });
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3002;
 
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);

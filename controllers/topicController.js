@@ -16,7 +16,8 @@ export const createTopic = async (req, res) => {
       includeFlashcards,
       includeQuiz,
       includeSummary,
-      includeMindMap
+      includeMindMap,
+      language
     } = req.body;
     const userId = req.user.id;
 
@@ -103,7 +104,8 @@ export const createTopic = async (req, res) => {
       includeFlashcards,
       includeQuiz,
       includeSummary,
-      includeMindMap
+      includeMindMap,
+      language
     });
 
     // 3. Return immediately
@@ -295,8 +297,17 @@ async function processContent(topicId, content, type, difficulty, userId, option
 
         // Update topic title with video title
         if (transcriptData.title) {
-          console.log(`📝 Updating topic title to: ${transcriptData.title}`);
-          await supabaseService.updateTopicTitle(topicId, transcriptData.title);
+          let videoTitle = transcriptData.title;
+          let counter = 1;
+
+          // Ensure unique title
+          while (await supabaseService.checkTopicExists(userId, videoTitle)) {
+            videoTitle = `${transcriptData.title} (${counter})`;
+            counter++;
+          }
+
+          console.log(`📝 Updating topic title to: ${videoTitle}`);
+          await supabaseService.updateTopicTitle(topicId, videoTitle);
         }
 
         console.log(`✅ Transcript extracted: ${text.length} chars`);
@@ -316,10 +327,25 @@ async function processContent(topicId, content, type, difficulty, userId, option
 
     const processedContent = await aiService.generateContent(text, difficulty, options);
 
-    // Update title with AI-generated title for text inputs (better than "Custom Text")
-    if (type === 'text' && processedContent.title) {
-      console.log(`📝 Updating topic title to AI title: ${processedContent.title}`);
-      await supabaseService.updateTopicTitle(topicId, processedContent.title);
+    // Update title with AI-generated title if:
+    // 1. Current title is the placeholder "Generating title..."
+    // 2. It's a text input (we trust AI title more than user's "Untitled")
+    // 3. We have a valid AI title
+    const currentTopic = await supabaseService.getTopicById(topicId);
+    const isPlaceholderTitle = currentTopic.title === 'Generating title...' || currentTopic.title === 'New Topic';
+
+    if (processedContent.title && (isPlaceholderTitle || type === 'text')) {
+      let finalTitle = processedContent.title;
+      let counter = 1;
+
+      // Ensure unique title
+      while (await supabaseService.checkTopicExists(userId, finalTitle)) {
+        finalTitle = `${processedContent.title} (${counter})`;
+        counter++;
+      }
+
+      console.log(`📝 Updating topic title to AI title: ${finalTitle}`);
+      await supabaseService.updateTopicTitle(topicId, finalTitle);
     }
 
     await supabaseService.updateProgress(topicId, 90);

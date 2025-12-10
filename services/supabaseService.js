@@ -66,6 +66,19 @@ export const updateTopicTitle = async (topicId, title) => {
   if (error) throw error;
   return data;
 };
+
+// Check if topic exists by title for user
+export const checkTopicExists = async (userId, title) => {
+  const { data, error } = await supabase
+    .from('topics')
+    .select('id')
+    .eq('userId', userId)
+    .eq('title', title)
+    .maybeSingle();
+
+  if (error) throw error;
+  return !!data;
+};
 // Save processed content with HTML
 // backend/services/supabaseService.js
 
@@ -239,15 +252,16 @@ export const deleteDeviceToken = async (token) => {
 // Subscription Management Functions
 
 // Get user's subscription info
+// Get user's subscription info
 export const getUserSubscriptionInfo = async (userId) => {
   const { data, error } = await supabase
     .from('user_profiles')
-    .select('subscription_plan, topics_created_count')
+    .select('subscription_plan, subscription_status, subscription_plan_type, product_identifier, topics_created_count')
     .eq('id', userId)
     .single();
 
   if (error) throw error;
-  return data || { subscription_plan: 'free', topics_created_count: 0 };
+  return data || { subscription_plan: 'free', subscription_status: 'active', subscription_plan_type: null, product_identifier: null, topics_created_count: 0 };
 };
 
 // Increment user's topic creation count
@@ -276,16 +290,114 @@ export const incrementTopicCount = async (userId) => {
 };
 
 // Update user's subscription plan
-export const updateSubscriptionPlan = async (userId, plan) => {
+export const updateSubscriptionPlan = async (userId, plan, status = 'active', revenuecatCustomerId = null, productId = null, planType = null) => {
+  console.log(`📝 Attempting to update subscription for user: ${userId} to plan: ${plan}, status: ${status}`);
+  if (revenuecatCustomerId) {
+    console.log(`🔗 Storing RevenueCat Customer ID: ${revenuecatCustomerId}`);
+  }
+  if (productId) {
+    console.log(`📦 Storing Product ID: ${productId}`);
+  }
+  if (planType) {
+    console.log(`📅 Storing Plan Type: ${planType}`);
+  }
+
+  // Prepare update data
+  const updateData = {
+    subscription_plan: plan,
+    subscription_status: status,
+    updated_at: new Date().toISOString()
+  };
+
+  // Add RevenueCat customer ID if provided
+  if (revenuecatCustomerId) {
+    updateData.revenuecat_customer_id = revenuecatCustomerId;
+  }
+
+  // Add product ID if provided
+  if (productId) {
+    updateData.product_identifier = productId;
+  }
+
+  // Add plan type if provided
+  if (planType) {
+    updateData.subscription_plan_type = planType;
+  }
+
+  // Try to update existing profile
   const { data, error } = await supabase
     .from('user_profiles')
-    .update({ subscription_plan: plan })
+    .update(updateData)
     .eq('id', userId)
+    .select()
+    .maybeSingle(); // Use maybeSingle to avoid error if not found
+
+  if (error) {
+    console.error('❌ Supabase error updating subscription:', error);
+    throw error;
+  }
+
+  // If profile exists and was updated
+  if (data) {
+    console.log('✅ Subscription updated successfully for user:', userId, 'New plan:', data.subscription_plan, 'Status:', data.subscription_status, 'Type:', data.subscription_plan_type);
+    return data;
+  }
+
+  // If profile doesn't exist, create it
+  console.log(`⚠️ User profile not found for ${userId}, creating new profile...`);
+
+  // 1. Get user details from Auth
+  const { data: userData, error: userError } = await supabase.auth.admin.getUserById(userId);
+
+  if (userError || !userData.user) {
+    console.error('❌ Failed to find user in Auth:', userError);
+    throw new Error(`User ${userId} not found in Auth system`);
+  }
+
+  const user = userData.user;
+
+  // 2. Create new profile
+  const newProfileData = {
+    id: userId,
+    email: user.email,
+    full_name: user.user_metadata?.full_name || '',
+    auth_provider: user.app_metadata?.provider || 'email',
+    subscription_plan: plan,
+    subscription_status: status,
+    topics_created_count: 0,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    last_login_at: new Date().toISOString()
+  };
+
+  // Add RevenueCat customer ID if provided
+  if (revenuecatCustomerId) {
+    newProfileData.revenuecat_customer_id = revenuecatCustomerId;
+  }
+
+  // Add product ID if provided
+  if (productId) {
+    newProfileData.product_identifier = productId;
+  }
+
+  // Add plan type if provided
+  if (planType) {
+    newProfileData.subscription_plan_type = planType;
+  }
+
+  const { data: newProfile, error: createError } = await supabase
+    .from('user_profiles')
+    .insert(newProfileData)
     .select()
     .single();
 
-  if (error) throw error;
-  return data;
+  if (createError) {
+    console.error('❌ Failed to create user profile:', createError);
+    throw createError;
+  }
+
+  console.log('✅ Created new profile with subscription for user:', userId);
+  return newProfile;
 };
 
 // Default export for convenience
@@ -307,5 +419,6 @@ export default {
   deleteDeviceToken,
   getUserSubscriptionInfo,
   incrementTopicCount,
-  updateSubscriptionPlan
+  updateSubscriptionPlan,
+  checkTopicExists
 };

@@ -1,4 +1,5 @@
 import supabase from '../config/supabase.js';
+import axios from 'axios';
 
 // Helper function to map Supabase errors to user-friendly messages
 const mapAuthErrorToUserMessage = (error) => {
@@ -100,96 +101,105 @@ export const signUpWithEmail = async (req, res) => {
 
 // Sign in with Apple ID Token
 export const signInWithApple = async (req, res) => {
-  try {
-    const { identityToken, fullName } = req.body;
-
-    console.log('🍎 [Backend] Apple Sign-In Request Received');
-    console.log('🍎 [Backend] Identity Token (First 50 chars):', identityToken ? identityToken.substring(0, 50) + '...' : 'MISSING');
-    console.log('🍎 [Backend] Full Name:', fullName);
-
-    if (!identityToken) {
-      console.error('🍎 [Backend] Error: Identity token missing');
-      return res.status(400).json({ error: 'Identity token required' });
-    }
-
-    console.log('🍎 [Backend] Calling Supabase signInWithIdToken...');
-    const { data, error } = await supabase.auth.signInWithIdToken({
-      provider: 'apple',
-      token: identityToken,
-    });
-
-    if (error) {
-      console.error('🍎 [Backend] Supabase Auth Error:', error);
-      console.error('🍎 [Backend] Error Message:', error.message);
-      throw error;
-    }
-
-    console.log('🍎 [Backend] Supabase Auth Success');
-    console.log('🍎 [Backend] User ID:', data.user?.id);
-
-    // Update profile if fullName is provided (first login usually)
-    if (data.user) {
-      const updates = { last_login_at: new Date().toISOString() };
-
-      if (fullName && (!data.user.user_metadata?.full_name)) {
-        updates.full_name = fullName;
-        // Also update Supabase user metadata
-        await supabase.auth.updateUser({
-          data: { full_name: fullName }
-        });
-      }
-
-      await supabase
-        .from('user_profiles')
-        .update(updates)
-        .eq('id', data.user.id);
-    }
-
-    res.json({
-      success: true,
-      user: data.user,
-      session: data.session
-    });
-
-  } catch (error) {
-    console.error('🍎 [Backend] Apple sign in error (Catch Block):', error);
-    res.status(400).json({ error: error.message, details: error });
-  }
+  return res.status(400).json({ error: 'Apple Sign-In is currently disabled.' });
 };
 
-// Sign in with Google ID Token
+// Sign in with Google (ID Token Flow)
 export const signInWithGoogle = async (req, res) => {
   try {
     const { idToken } = req.body;
 
+    console.log('🤖 ========== GOOGLE SIGN-IN REQUEST ==========');
+    console.log('📥 Request body keys:', Object.keys(req.body));
+    console.log('🔑 ID Token received:', !!idToken);
+    console.log('🔑 ID Token length:', idToken?.length || 0);
+    console.log('🔑 ID Token preview:', idToken ? idToken.substring(0, 50) + '...' : 'MISSING');
+
     if (!idToken) {
-      return res.status(400).json({ error: 'ID token required' });
+      console.error('❌ No ID Token provided in request');
+      return res.status(400).json({ error: 'ID Token is required' });
     }
 
+    console.log('📤 Calling Supabase signInWithIdToken...');
+
+    // Sign in with Supabase using the ID token
     const { data, error } = await supabase.auth.signInWithIdToken({
       provider: 'google',
       token: idToken,
     });
 
-    if (error) throw error;
+    console.log('📥 Supabase response:', {
+      hasData: !!data,
+      hasError: !!error,
+      hasUser: !!data?.user,
+      hasSession: !!data?.session,
+      userId: data?.user?.id,
+      userEmail: data?.user?.email,
+      errorMessage: error?.message,
+      errorStatus: error?.status,
+    });
 
-    // Update last login
-    if (data.user) {
-      await supabase
-        .from('user_profiles')
-        .update({ last_login_at: new Date().toISOString() })
-        .eq('id', data.user.id);
+    if (error) {
+      console.error('❌ Supabase signInWithIdToken error:', {
+        message: error.message,
+        status: error.status,
+        name: error.name,
+      });
+      throw error;
     }
+
+    // Check/Create user profile
+    if (data.user) {
+      console.log('👤 Creating/updating user profile...');
+      console.log('User metadata:', data.user.user_metadata);
+
+      const { error: profileError } = await supabase
+        .from('user_profiles')
+        .upsert({
+          id: data.user.id,
+          email: data.user.email,
+          full_name: data.user.user_metadata?.full_name || '',
+          avatar_url: data.user.user_metadata?.avatar_url || '',
+          auth_provider: data.user.app_metadata?.provider || 'google',
+          updated_at: new Date().toISOString(),
+          last_login_at: new Date().toISOString(),
+        }, { onConflict: 'id' });
+
+      if (profileError) {
+        console.error('⚠️ Error updating profile (non-fatal):', profileError);
+      } else {
+        console.log('✅ User profile created/updated successfully');
+      }
+    }
+
+    console.log('✅ Google Sign-In successful, sending response');
+    console.log('📤 Response data:', {
+      success: true,
+      hasUser: !!data.user,
+      hasSession: !!data.session,
+      userId: data.user?.id,
+    });
 
     res.json({
       success: true,
       user: data.user,
-      session: data.session
+      session: data.session,
     });
 
   } catch (error) {
-    console.error('Google sign in error:', error);
-    res.status(400).json({ error: error.message });
+    console.error('❌ ========== GOOGLE SIGN-IN ERROR ==========');
+    console.error('Error details:', {
+      message: error.message,
+      name: error.name,
+      status: error.status,
+      response: error.response?.data,
+      stack: error.stack,
+    });
+
+    res.status(400).json({
+      error: 'Google Sign-In failed',
+      details: error.response?.data || error.message
+    });
   }
 };
 
@@ -231,63 +241,12 @@ export const signInWithEmail = async (req, res) => {
 
 // Sign in with OAuth (Google/Apple) - generates auth URL
 export const signInWithOAuth = async (req, res) => {
-  try {
-    const { provider } = req.body; // 'google' or 'apple'
-
-    if (!['google', 'apple'].includes(provider)) {
-      return res.status(400).json({
-        error: 'Invalid provider. Use "google" or "apple"'
-      });
-    }
-
-    const { data, error } = await supabase.auth.signInWithOAuth({
-      provider,
-      options: {
-        redirectTo: `${process.env.APP_URL}/auth/callback`
-      }
-    });
-
-    if (error) throw error;
-
-    res.json({
-      success: true,
-      url: data.url // Frontend should open this URL
-    });
-
-  } catch (error) {
-    console.error('OAuth error:', error);
-    res.status(400).json({ error: error.message });
-  }
+  return res.status(400).json({ error: 'OAuth is currently disabled.' });
 };
 
 // Handle OAuth callback
 export const handleOAuthCallback = async (req, res) => {
-  try {
-    const { access_token, refresh_token } = req.body;
-
-    const { data, error } = await supabase.auth.setSession({
-      access_token,
-      refresh_token
-    });
-
-    if (error) throw error;
-
-    // Update last login
-    await supabase
-      .from('user_profiles')
-      .update({ last_login_at: new Date().toISOString() })
-      .eq('id', data.user.id);
-
-    res.json({
-      success: true,
-      user: data.user,
-      session: data.session
-    });
-
-  } catch (error) {
-    console.error('OAuth callback error:', error);
-    res.status(400).json({ error: error.message });
-  }
+  return res.status(400).json({ error: 'OAuth is currently disabled.' });
 };
 
 // Sign out

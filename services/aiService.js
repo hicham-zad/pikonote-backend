@@ -27,7 +27,8 @@ export const generateContent = async (text, difficulty = 'medium', options = {})
       includeSummary = true,
       includeQuiz = true,
       includeFlashcards = true,
-      includeMindMap = true
+      includeMindMap = true,
+      language = 'en'
     } = options;
 
     if (!text || text.trim().length < 50) {
@@ -50,11 +51,21 @@ ${text}
 DIFFICULTY: ${difficulty.toUpperCase()}
 ${difficultyInstructions[difficulty]}
 
+DIFFICULTY: ${difficulty.toUpperCase()}
+${difficultyInstructions[difficulty]}
+
+LANGUAGE: ${language === 'fr' ? 'French (Français)' : 'English'}
+IMPORTANT: All generated content (titles, summaries, questions, flashcards, mind maps) MUST be in ${language === 'fr' ? 'French' : 'English'}. The JSON structure keys must remain in English, but the values/content must be in the target language.
+
 Create a structured learning document with the following sections:
 `;
 
     let sectionIndex = 1;
-    const jsonStructure = { title: "Content title", icon: "LucideIconName" };
+    const jsonStructure = { title: "Short Descriptive Title", icon: "LucideIconName" };
+
+    promptInstructions += `
+    1. TITLE: Generate a short, catchy, and descriptive title (max 5-7 words) that best summarizes the content.
+    `;
 
     promptInstructions += `
     Also suggest a single Lucide React Native icon name that best represents this topic (e.g. "Brain", "Code", "History", "Calculator", "Globe", "Music", "FlaskConical").
@@ -78,7 +89,7 @@ ${sectionIndex++}. SUMMARY:
 
     if (includeQuiz) {
       promptInstructions += `
-${sectionIndex++}. QUIZ: 5-8 multiple choice questions
+${sectionIndex++}. QUIZ: 6-10 multiple choice questions (adapt quantity to content length: 6 for short, up to 10 for detailed content)
 `;
       jsonStructure.quiz = [{
         question: "?",
@@ -90,7 +101,7 @@ ${sectionIndex++}. QUIZ: 5-8 multiple choice questions
 
     if (includeFlashcards) {
       promptInstructions += `
-${sectionIndex++}. FLASHCARDS: 8-12 cards
+${sectionIndex++}. FLASHCARDS: 6-10 cards (adapt quantity to content length: 6 for short, up to 10 for detailed content)
 `;
       jsonStructure.flashcards = [{ question: "Q", answer: "A" }];
     }
