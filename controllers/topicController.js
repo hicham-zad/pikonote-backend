@@ -166,12 +166,14 @@ export const getTopic = async (req, res) => {
 export const getUserTopics = async (req, res) => {
   try {
     const userId = req.user.id;
-    const limit = parseInt(req.query.limit) || 20;
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 8; // Default to 8
     const filter = req.query.filter || 'recent'; // recent, week, month
 
-    console.log(`🔍 Controller received filter: "${filter}" for user ${userId}`);
+    console.log(`🔍 Controller received filter: "${filter}", page: ${page}, limit: ${limit} for user ${userId}`);
 
-    const topics = await supabaseService.getUserTopics(userId, limit, filter);
+    // Destructure data and count from service response
+    const { data: topics, count } = await supabaseService.getUserTopics(userId, page, limit, filter);
 
     const formattedTopics = topics.map(topic => ({
       ...topic,
@@ -185,7 +187,9 @@ export const getUserTopics = async (req, res) => {
 
     res.json({
       success: true,
-      count: formattedTopics.length,
+      count: count || 0,
+      totalPages: Math.ceil((count || 0) / limit),
+      currentPage: page,
       topics: formattedTopics
     });
 
@@ -554,4 +558,3 @@ export const getTopicHTML = async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 };
-

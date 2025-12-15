@@ -114,12 +114,12 @@ export const saveProcessedContent = async (topicId, content) => {
 };
 
 // Get user's topics
-export const getUserTopics = async (userId, limit = 20, filter = 'recent') => {
-  console.log(`📊 Getting topics for user ${userId} with filter: ${filter}`);
+export const getUserTopics = async (userId, page = 1, limit = 8, filter = 'recent') => {
+  console.log(`📊 Getting topics for user ${userId} with filter: ${filter}, page: ${page}, limit: ${limit}`);
 
   let query = supabase
     .from('topics')
-    .select('*')
+    .select('*', { count: 'exact' }) // Request total count
     .eq('userId', userId);
 
   // Apply date filter
@@ -144,14 +144,17 @@ export const getUserTopics = async (userId, limit = 20, filter = 'recent') => {
   }
   // 'recent' = no filter, show all
 
-  const { data, error } = await query
+  const from = (page - 1) * limit;
+  const to = from + limit - 1;
+
+  const { data, count, error } = await query
     .order('createdAt', { ascending: false })
-    .limit(limit);
+    .range(from, to);
 
   if (error) throw error;
 
-  console.log(`✅ Found ${data.length} topics`);
-  return data;
+  console.log(`✅ Found ${data.length} topics (Total: ${count})`);
+  return { data, count };
 };
 
 // Delete topic
