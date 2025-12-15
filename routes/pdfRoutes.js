@@ -14,10 +14,15 @@ const upload = multer({
         fileSize: 10 * 1024 * 1024 // 10MB limit
     },
     fileFilter: (req, file, cb) => {
-        if (file.mimetype === 'application/pdf') {
+        const allowedMimes = [
+            'application/pdf',
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+        ];
+
+        if (allowedMimes.includes(file.mimetype)) {
             cb(null, true);
         } else {
-            cb(new Error('Only PDF files are allowed'), false);
+            cb(new Error('Only PDF and Word (.docx) files are allowed'), false);
         }
     }
 });

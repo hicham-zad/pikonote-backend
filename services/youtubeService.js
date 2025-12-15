@@ -1,58 +1,78 @@
 import { YoutubeTranscript } from '@danielxceron/youtube-transcript';
+import { Innertube } from 'youtubei.js';
+
+let youtubeClient = null;
+
+const getYoutubeClient = async () => {
+  if (!youtubeClient) {
+    youtubeClient = await Innertube.create();
+  }
+  return youtubeClient;
+};
 
 export const extractYouTubeTranscript = async (url) => {
-  try {
-    const videoId = extractVideoId(url);
-    console.log(`🎥 Attempting to extract transcript for video ID: ${videoId}`);
-    console.log(`📺 Full URL: ${url}`);
+  const videoId = extractVideoId(url);
+  console.log(`🎥 Attempting to extract transcript for video ID: ${videoId}`);
+  console.log(`📺 Full URL: ${url}`);
 
-    // Use the more reliable fork with dual extraction methods
-    // This package tries HTML scraping first, then falls back to InnerTube API
+  try {
+    // Strategy 1: Fast Scraper (youtube-transcript)
+    console.log('⚡️ Strategy 1: Attempting fast scraper...');
     const transcriptData = await YoutubeTranscript.fetchTranscript(videoId);
 
-    console.log(`✅ Transcript data received, segments: ${transcriptData?.length || 0}`);
+    if (transcriptData && transcriptData.length > 0) {
+      console.log(`✅ Strategy 1 success! Segments: ${transcriptData.length}`);
+      const text = transcriptData.map(segment => segment.text).join(' ');
+      return {
+        text,
+        title: `YouTube Video ${videoId}`,
+        duration: null,
+        videoId
+      };
+    }
+  } catch (error) {
+    console.warn(`⚠️ Strategy 1 failed: ${error.message}`);
+    // Fall through to strategy 2
+  }
 
-    if (!transcriptData || transcriptData.length === 0) {
-      console.error('❌ Transcript data is empty');
+  try {
+    // Strategy 2: Robust Client (youtubei.js)
+    console.log('🛡️ Strategy 2: Attempting robust client (InnerTube)...');
+    const youtube = await getYoutubeClient();
+    const info = await youtube.getInfo(videoId);
+    const transcriptData = await info.getTranscript();
+
+    if (transcriptData && transcriptData.transcript?.content?.body?.initial_segments) {
+      console.log('✅ Strategy 2 success!');
+
+      const segments = transcriptData.transcript.content.body.initial_segments;
+      const text = segments
+        .map(segment => segment.snippet.text)
+        .join(' ');
+
+      return {
+        text,
+        title: info.basic_info.title || `YouTube Video ${videoId}`,
+        duration: info.basic_info.duration || null,
+        videoId
+      };
+    } else {
+      throw new Error('No transcript data found in robust client response');
+    }
+
+  } catch (error) {
+    console.error('❌ Strategy 2 failed:', error.message);
+
+    // Final Error Handling
+    const isCaptionsError = error.message.includes('No transcript') ||
+      error.message.includes('disabled') ||
+      error.message.includes('not available');
+
+    if (isCaptionsError) {
       throw new Error('No transcript available for this video. Please ensure the video has captions enabled.');
     }
 
-    // Combine all transcript segments into a single text
-    const text = transcriptData
-      .map(segment => segment.text)
-      .join(' ');
-
-    console.log(`📝 Transcript extracted successfully, length: ${text.length} characters`);
-
-    return {
-      text,
-      title: `YouTube Video ${videoId}`,
-      duration: null,
-      videoId
-    };
-  } catch (error) {
-    console.error('❌ YouTube transcript extraction error:', error);
-    console.error('Error details:', {
-      message: error.message,
-      stack: error.stack?.substring(0, 200), // Truncate stack trace
-      name: error.name
-    });
-
-    // Handle specific errors
-    if (error.message && (error.message.includes('Could not find') || error.message.includes('Transcript is disabled') || error.message.includes('No transcript'))) {
-      throw new Error('No transcript available for this video. The video may not have captions, or captions may be disabled by the creator.');
-    }
-
-    if (error.message && error.message.includes('disabled')) {
-      throw new Error('Transcripts are disabled for this video.');
-    }
-
-    if (error.message && error.message.includes('Invalid')) {
-      throw new Error('Invalid YouTube URL or video ID.');
-    }
-
-    // Re-throw with user-friendly message
-    throw new Error(`Unable to extract transcript: ${error.message}`);
+    throw new Error('Unable to extract transcript. Please try another video.');
   }
 };
 

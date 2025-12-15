@@ -19,7 +19,12 @@ export const extractContent = async (req, res) => {
         console.log(`📥 Processing PDF: ${req.file.originalname} `);
 
         // Extract text
-        const text = await pdfService.extractTextFromBuffer(req.file.buffer);
+        let text = '';
+        if (req.file.mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+            text = await pdfService.extractTextFromWordBuffer(req.file.buffer);
+        } else {
+            text = await pdfService.extractTextFromBuffer(req.file.buffer);
+        }
 
         // Check for insufficient text (e.g. scanned images)
         if (!text || text.trim().length < 100) {

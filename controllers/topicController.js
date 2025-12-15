@@ -289,6 +289,31 @@ async function processContent(topicId, content, type, difficulty, userId, option
     // For other types, we'll extract text first (Week 2-4)
     let text = content;
 
+    if (type === 'pdf') {
+      try {
+        if (content.startsWith('http')) {
+          console.log(`📄 PDF is unique URL, downloading from: ${content}`);
+          // Use built-in fetch (Node 18+)
+          const response = await fetch(content);
+          if (!response.ok) throw new Error(`Failed to download PDF: ${response.statusText}`);
+
+          const arrayBuffer = await response.arrayBuffer();
+          const buffer = Buffer.from(arrayBuffer);
+
+          console.log(`📄 Extracted buffer size: ${buffer.length}`);
+          text = await pdfService.extractTextFromBuffer(buffer);
+          console.log(`✅ PDF Text Extracted: ${text.length} chars`);
+        } else {
+          // If not http, assume it's already extracted text passed from frontend
+          console.log('📄 PDF content passed as direct text.');
+          text = content;
+        }
+      } catch (pdfError) {
+        console.error('❌ PDF Processing Error:', pdfError);
+        throw new Error(`Failed to process PDF: ${pdfError.message}`);
+      }
+    }
+
     if (type === 'youtube') {
       try {
         console.log(`🎥 Extracting transcript from YouTube URL: ${content}`);

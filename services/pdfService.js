@@ -4,6 +4,7 @@ import htmlTemplateService, { summaryToHTML } from './htmlTemplateService.js';
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 const pdfParse = require('pdf-parse');
+const mammoth = require('mammoth');
 
 // Extract text from PDF buffer
 export const extractTextFromBuffer = async (buffer) => {
@@ -30,6 +31,32 @@ export const extractTextFromBuffer = async (buffer) => {
       console.error('   - Reason: Invalid PDF format or corrupted file.');
     }
     throw new Error(`Failed to extract text from PDF: ${error.message}`);
+  }
+};
+
+// Extract text from Word buffer
+export const extractTextFromWordBuffer = async (buffer) => {
+  try {
+    console.log(`📄 Extracting text from Word buffer (Size: ${buffer.length} bytes)...`);
+
+    if (!Buffer.isBuffer(buffer)) {
+      throw new Error('Input is not a valid buffer');
+    }
+
+    const result = await mammoth.extractRawText({ buffer: buffer });
+    const text = result.value;
+
+    console.log('✅ Word Parse Result:');
+    console.log(`   - Text Length: ${text.length}`);
+
+    if (result.messages.length > 0) {
+      console.log('   - Messages:', result.messages);
+    }
+
+    return text;
+  } catch (error) {
+    console.error('❌ Word extraction error details:', error);
+    throw new Error(`Failed to extract text from Word file: ${error.message}`);
   }
 };
 
@@ -94,5 +121,7 @@ export const convertSummaryToHTML = (summary, title, difficulty) => {
 export default {
   generatePDFFromHTML,
   convertSummaryToHTML,
-  extractTextFromBuffer
+  convertSummaryToHTML,
+  extractTextFromBuffer,
+  extractTextFromWordBuffer
 };
