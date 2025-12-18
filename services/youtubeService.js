@@ -1,15 +1,157 @@
 import { YoutubeTranscript } from '@danielxceron/youtube-transcript';
-import { Innertube } from 'youtubei.js';
+import { Innertube, UniversalCache } from 'youtubei.js';
 import ytdl from '@distube/ytdl-core';
 import axios from 'axios';
+import { HttpsProxyAgent } from 'https-proxy-agent';
+import { google } from 'googleapis';
 
 let youtubeClient = null;
 
 const getYoutubeClient = async () => {
   if (!youtubeClient) {
-    youtubeClient = await Innertube.create();
+    const config = {
+      cache: new UniversalCache(false),
+      generate_session_locally: true,
+    };
+
+    if (process.env.YOUTUBE_COOKIES) {
+      config.cookie = process.env.YOUTUBE_COOKIES;
+    }
+
+    if (process.env.PROXY_URL) {
+      config.proxy = {
+        url: process.env.PROXY_URL,
+      }
+    }
+
+    youtubeClient = await Innertube.create(config);
   }
   return youtubeClient;
+};
+
+// Helper to parse cookies string "key=value; key2=value2" into array for ytdl
+const parseCookies = (cookieStr) => {
+  if (!cookieStr) return undefined;
+  try {
+    return cookieStr.split(';').map(c => {
+      const parts = c.split('=');
+      const key = parts[0]?.trim();
+      const value = parts.slice(1).join('=').trim();
+      if (key && value) return { name: key, value };
+      return null;
+    }).filter(c => c);
+  } catch (e) {
+    console.warn('Failed to parse cookies:', e);
+    return undefined;
+  }
+};
+
+// Strategy 4: YouTube Data API v3
+const extractWithYouTubeAPI = async (videoId) => {
+  const apiKey = process.env.YOUTUBE_API_KEY;
+  if (!apiKey) {
+    throw new Error('YOUTUBE_API_KEY not configured');
+  }
+
+  console.log('🔑 Strategy 4: Attempting YouTube Data API v3...');
+
+  const youtube = google.youtube({ version: 'v3', auth: apiKey });
+
+  // Step 1: Get video details for title
+  const videoResponse = await youtube.videos.list({
+    part: ['snippet'],
+    id: [videoId],
+  });
+
+  const videoTitle = videoResponse.data.items?.[0]?.snippet?.title || `YouTube Video ${videoId}`;
+
+  // Step 2: Get caption tracks
+  const captionsResponse = await youtube.captions.list({
+    part: ['snippet'],
+    videoId: videoId,
+  });
+
+  const captions = captionsResponse.data.items;
+  if (!captions || captions.length === 0) {
+    throw new Error('No captions available via YouTube API');
+  }
+
+  // Prefer English, otherwise take first available
+  const englishCaption = captions.find(c => c.snippet?.language === 'en');
+  const caption = englishCaption || captions[0];
+  const captionId = caption.id;
+
+  console.log(`📝 Found caption track: ${caption.snippet?.name || caption.snippet?.language}`);
+
+  // Step 3: Download caption content
+  // Note: This requires OAuth for third-party captions, but works for auto-captions
+  // For auto-captions, we'll use the timedtext endpoint as fallback
+  try {
+    const captionResponse = await youtube.captions.download({
+      id: captionId,
+      tfmt: 'srt', // Get as SRT format
+    });
+
+    if (captionResponse.data) {
+      // Parse SRT to plain text
+      const srtText = captionResponse.data;
+      const text = srtText
+        .split('\n')
+        .filter(line => !line.match(/^\d+$/) && !line.match(/^\d{2}:\d{2}:\d{2}/))
+        .join(' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+      console.log('✅ Strategy 4 success!');
+      return {
+        text,
+        title: videoTitle,
+        duration: null,
+        videoId,
+      };
+    }
+  } catch (downloadError) {
+    console.warn('Direct caption download failed (may need OAuth):', downloadError.message);
+
+    // Fallback: Use timedtext API for auto-generated captions
+    const lang = caption.snippet?.language || 'en';
+    const timedTextUrl = `https://www.youtube.com/api/timedtext?v=${videoId}&lang=${lang}&fmt=srv3`;
+
+    try {
+      const response = await axios.get(timedTextUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        }
+      });
+
+      if (response.data) {
+        // Parse XML transcript
+        const matches = [...response.data.matchAll(/<text[^>]*>(.*?)<\/text>/g)];
+        const text = matches.map(m => {
+          return m[1]
+            .replace(/&amp;/g, '&')
+            .replace(/&lt;/g, '<')
+            .replace(/&gt;/g, '>')
+            .replace(/&quot;/g, '"')
+            .replace(/&#39;/g, "'");
+        }).join(' ');
+
+        if (text.length > 0) {
+          console.log('✅ Strategy 4 success (via timedtext fallback)!');
+          return {
+            text,
+            title: videoTitle,
+            duration: null,
+            videoId,
+          };
+        }
+      }
+    } catch (timedTextError) {
+      console.warn('Timedtext fallback failed:', timedTextError.message);
+    }
+  }
+
+  throw new Error('Failed to download captions via YouTube API');
 };
 
 export const extractYouTubeTranscript = async (url) => {
@@ -17,8 +159,26 @@ export const extractYouTubeTranscript = async (url) => {
   console.log(`🎥 Attempting to extract transcript for video ID: ${videoId}`);
   console.log(`📺 Full URL: ${url}`);
 
+  // Setup Agents for YTDL
+  const proxyUrl = process.env.PROXY_URL;
+  const cookies = parseCookies(process.env.YOUTUBE_COOKIES);
+
+  let ytdlAgent;
   try {
-    // Strategy 1: Fast Scraper (youtube-transcript)
+    const agentOptions = {};
+    if (proxyUrl) {
+      console.log('🔗 Using Proxy for YouTube extraction');
+      agentOptions.http = new HttpsProxyAgent(proxyUrl);
+      agentOptions.https = new HttpsProxyAgent(proxyUrl);
+    }
+
+    ytdlAgent = ytdl.createAgent(cookies, agentOptions);
+  } catch (e) {
+    console.warn('Failed to create YTDL agent:', e);
+  }
+
+  // Strategy 1: Fast Scraper (youtube-transcript)
+  try {
     console.log('⚡️ Strategy 1: Attempting fast scraper...');
     const transcriptData = await YoutubeTranscript.fetchTranscript(videoId);
 
@@ -34,92 +194,80 @@ export const extractYouTubeTranscript = async (url) => {
     }
   } catch (error) {
     console.warn(`⚠️ Strategy 1 failed: ${error.message}`);
-    // Fall through to strategy 2
   }
 
+  // Strategy 2: Robust Client (Innertube / youtubei.js)
   try {
-    // Strategy 2: Robust Client (youtubei.js)
     console.log('🛡️ Strategy 2: Attempting robust client (InnerTube)...');
     const youtube = await getYoutubeClient();
     const info = await youtube.getInfo(videoId);
 
-    // Attempt primary transcript extraction
     let transcriptData;
     try {
       transcriptData = await info.getTranscript();
     } catch (innerErr) {
-      console.warn('Primary transcript extraction failed, attempting captions fallback:', innerErr.message);
-      // Fallback: use captions if available
-      if (info.captions && typeof info.captions.getTranscript === 'function') {
-        transcriptData = await info.captions.getTranscript();
-      } else {
-        throw innerErr; // rethrow if no fallback
+      console.warn('Primary transcript extraction failed:', innerErr.message);
+      if (info.captions) {
+        transcriptData = await info.getTranscript();
       }
+      if (!transcriptData) throw innerErr;
     }
 
     if (transcriptData && transcriptData.transcript?.content?.body?.initial_segments) {
       console.log('✅ Strategy 2 success!');
-
       const segments = transcriptData.transcript.content.body.initial_segments;
-      const text = segments
-        .map(segment => segment.snippet.text)
-        .join(' ');
-
+      const text = segments.map(segment => segment.snippet.text).join(' ');
       return {
         text,
         title: info.basic_info.title || `YouTube Video ${videoId}`,
         duration: info.basic_info.duration || null,
         videoId,
       };
-    } else {
-      throw new Error('No transcript data found in robust client response');
     }
-
   } catch (error) {
     console.warn('❌ Strategy 2 failed:', error.message);
-    // Fall through to strategy 3
   }
 
+  // Strategy 3: ytdl-core + XML parsing
   try {
-    // Strategy 3: ytdl-core + XML parsing
     console.log('📼 Strategy 3: Attempting ytdl-core extraction...');
-    // ytdl.getInfo requires the full URL
-    const info = await ytdl.getInfo(`https://www.youtube.com/watch?v=${videoId}`);
+    const info = await ytdl.getInfo(`https://www.youtube.com/watch?v=${videoId}`, { agent: ytdlAgent });
     const captions = info.player_response?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
 
     if (captions && captions.length > 0) {
-      // Prefer English, but take the first one available
       const track = captions.find(t => t.languageCode === 'en') || captions[0];
       const transcriptUrl = track.baseUrl;
 
       console.log(`Fetching transcript from: ${transcriptUrl}`);
 
-      // Retry logic for 429 errors
       let attempts = 0;
       const maxAttempts = 3;
       let xml = null;
 
+      const axiosConfig = {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        }
+      };
+
+      if (proxyUrl) {
+        const proxyAgent = new HttpsProxyAgent(proxyUrl);
+        axiosConfig.httpAgent = proxyAgent;
+        axiosConfig.httpsAgent = proxyAgent;
+      }
+
       while (attempts < maxAttempts) {
         try {
-          const response = await axios.get(transcriptUrl, {
-            headers: {
-              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-              'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
-              'Accept-Language': 'en-US,en;q=0.9',
-            }
-          });
+          const response = await axios.get(transcriptUrl, axiosConfig);
           xml = response.data;
-          break; // Success
+          break;
         } catch (err) {
           attempts++;
           console.warn(`Attempt ${attempts} failed: ${err.message}`);
           if (attempts >= maxAttempts) throw err;
-          await new Promise(r => setTimeout(r, 1500 * attempts)); // Backoff with slightly longer delay
+          await new Promise(r => setTimeout(r, 1500 * attempts));
         }
       }
-
-      // Simple regex to extract text to avoid extra cheerio dependency overhead
-      // XML format: <text ...>Content</text>
 
       const cleanText = (str) => {
         return str
@@ -146,17 +294,19 @@ export const extractYouTubeTranscript = async (url) => {
       }
     }
     throw new Error('No captions found via ytdl-core');
-
   } catch (error) {
-    console.error('❌ Strategy 3 failed:', error.message);
-
-    // Final Error Fallback
-    if (error.message.includes('No captions')) {
-      throw new Error('This video has no captions. Please try another video.');
-    }
-    throw new Error('Unable to extract transcript. This video may have no captions. Please try another video.');
+    console.warn('❌ Strategy 3 failed:', error.message);
   }
 
+  // Strategy 4: YouTube Data API v3 (Official)
+  try {
+    return await extractWithYouTubeAPI(videoId);
+  } catch (error) {
+    console.warn('❌ Strategy 4 failed:', error.message);
+  }
+
+  // All strategies failed
+  throw new Error('Unable to extract transcript. Please ensure the video has captions enabled, or try another video.');
 };
 
 // Helper to extract video ID from various YouTube URL formats
@@ -164,7 +314,7 @@ export const extractVideoId = (url) => {
   const patterns = [
     /(?:youtube\.com\/watch\?v=|youtu\.be\/)([^&\n?#]+)/,
     /youtube\.com\/embed\/([^&\n?#]+)/,
-    /youtube\.com\/shorts\/([^&\n?#]+)/, // Support YouTube Shorts
+    /youtube\.com\/shorts\/([^&\n?#]+)/,
   ];
 
   for (const pattern of patterns) {
