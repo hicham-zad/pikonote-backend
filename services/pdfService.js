@@ -5,6 +5,7 @@ import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 const pdfParse = require('pdf-parse');
 const mammoth = require('mammoth');
+const officeParser = require('officeparser');
 
 // Extract text from PDF buffer
 export const extractTextFromBuffer = async (buffer) => {
@@ -57,6 +58,50 @@ export const extractTextFromWordBuffer = async (buffer) => {
   } catch (error) {
     console.error('❌ Word extraction error details:', error);
     throw new Error(`Failed to extract text from Word file: ${error.message}`);
+  }
+};
+
+// Extract text from PowerPoint buffer  
+export const extractTextFromPowerPointBuffer = async (buffer) => {
+  try {
+    console.log(`📄 Extracting text from PowerPoint buffer (Size: ${buffer.length} bytes)...`);
+
+    if (!Buffer.isBuffer(buffer)) {
+      throw new Error('Input is not a valid buffer');
+    }
+
+    // officeparser requires a file path, so write buffer to temp file
+    const fs = require('fs');
+    const path = require('path');
+    const os = require('os');
+
+    const tempDir = os.tmpdir();
+    const tempFilePath = path.join(tempDir, `temp-${Date.now()}.pptx`);
+
+    // Write buffer to temp file
+    fs.writeFileSync(tempFilePath, buffer);
+
+    try {
+      // Extract text using officeparser
+      const text = await officeParser.parseOfficeAsync(tempFilePath);
+
+      console.log('✅ PowerPoint Parse Result:');
+      console.log(`   - Text Length: ${text.length}`);
+
+      // Clean up temp file
+      fs.unlinkSync(tempFilePath);
+
+      return text;
+    } catch (parseError) {
+      // Clean up temp file even if parsing fails
+      if (fs.existsSync(tempFilePath)) {
+        fs.unlinkSync(tempFilePath);
+      }
+      throw parseError;
+    }
+  } catch (error) {
+    console.error('❌ PowerPoint extraction error details:', error);
+    throw new Error(`Failed to extract text from PowerPoint file: ${error.message}`);
   }
 };
 
@@ -123,5 +168,6 @@ export default {
   convertSummaryToHTML,
   convertSummaryToHTML,
   extractTextFromBuffer,
-  extractTextFromWordBuffer
+  extractTextFromWordBuffer,
+  extractTextFromPowerPointBuffer
 };

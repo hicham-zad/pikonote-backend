@@ -29,7 +29,7 @@ export const ERROR_MESSAGES = {
     [TRANSCRIPT_ERRORS.NO_CAPTIONS_AVAILABLE]: 'No captions available for this video. The creator may not have added subtitles.',
     [TRANSCRIPT_ERRORS.REGION_BLOCKED]: 'This video is not available in your region.',
     [TRANSCRIPT_ERRORS.EXTRACTION_FAILED]: 'Failed to extract transcript. Please try again later.',
-    [TRANSCRIPT_ERRORS.RATE_LIMITED]: 'Too many requests. Please wait a moment and try again.',
+    [TRANSCRIPT_ERRORS.RATE_LIMITED]: 'YouTube is temporarily limiting requests. Please wait 1-2 minutes and try again.',
     [TRANSCRIPT_ERRORS.NETWORK_ERROR]: 'Network error. Please check your connection and try again.',
 };
 

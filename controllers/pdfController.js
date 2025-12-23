@@ -18,11 +18,16 @@ export const extractContent = async (req, res) => {
 
         console.log(`📥 Processing PDF: ${req.file.originalname} `);
 
-        // Extract text
+        // Extract text based on file type
         let text = '';
         if (req.file.mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+            // Word document (.docx)
             text = await pdfService.extractTextFromWordBuffer(req.file.buffer);
+        } else if (req.file.mimetype === 'application/vnd.openxmlformats-officedocument.presentationml.presentation') {
+            // PowerPoint (.pptx)
+            text = await pdfService.extractTextFromPowerPointBuffer(req.file.buffer);
         } else {
+            // PDF
             text = await pdfService.extractTextFromBuffer(req.file.buffer);
         }
 

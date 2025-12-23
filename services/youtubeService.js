@@ -10,6 +10,7 @@ import {
   detectErrorType,
   ERROR_MESSAGES
 } from './youtubeErrors.js';
+import { getTranscriptFromRapidAPI } from './youtube-rapidapi.service.js';
 
 let youtubeClient = null;
 
@@ -18,6 +19,9 @@ const getYoutubeClient = async () => {
     const config = {
       cache: new UniversalCache(false),
       generate_session_locally: true,
+      // Suppress non-critical parser warnings (new YouTube features not yet supported)
+      enable_safety_mode: false,
+      retrieve_player: false, // Skip player which causes most parser errors
     };
 
     if (process.env.YOUTUBE_COOKIES) {
@@ -292,6 +296,10 @@ export const extractYouTubeTranscript = async (url, options = {}) => {
   console.log(`🎥 Attempting to extract transcript for video ID: ${videoId}`);
   console.log(`📺 Full URL: ${url}`);
 
+  // Store video metadata (title, duration) from pre-flight check
+  let videoTitle = null;
+  let videoDuration = null;
+
   // Pre-flight availability check (optional but recommended)
   if (!skipPreflightCheck) {
     console.log('🔍 Running pre-flight availability check...');
@@ -310,7 +318,11 @@ export const extractYouTubeTranscript = async (url, options = {}) => {
       // Don't fail yet - strategies might still work with auto-captions
     }
 
-    console.log(`✅ Pre-flight check passed: ${availability.title || videoId}`);
+    // Store metadata for later use
+    videoTitle = availability.title;
+    videoDuration = availability.durationSeconds;
+
+    console.log(`✅ Pre-flight check passed: ${videoTitle || videoId}`);
   }
 
   // Setup Agents for YTDL
@@ -334,9 +346,9 @@ export const extractYouTubeTranscript = async (url, options = {}) => {
   // Track errors from each strategy for better diagnostics
   const strategyErrors = [];
 
-  // Strategy 1: Fast Scraper (youtube-transcript)
+  // Strategy 1: Fast Scraper (youtube-transcript library - most reliable free method)
   try {
-    console.log('⚡️ Strategy 1: Attempting fast scraper...');
+    console.log('⚡️ Strategy 1: youtube-transcript library...');
     const transcriptData = await YoutubeTranscript.fetchTranscript(videoId);
 
     if (transcriptData && transcriptData.length > 0) {
@@ -344,126 +356,168 @@ export const extractYouTubeTranscript = async (url, options = {}) => {
       const text = transcriptData.map(segment => segment.text).join(' ');
       return {
         text,
-        title: `YouTube Video ${videoId}`,
-        duration: null,
-        videoId
-      };
-    }
-  } catch (error) {
-    console.warn(`⚠️ Strategy 1 failed: ${error.message}`);
-    strategyErrors.push({ strategy: 1, error: error.message });
-  }
-
-  // Strategy 2: Robust Client (Innertube / youtubei.js)
-  try {
-    console.log('🛡️ Strategy 2: Attempting robust client (InnerTube)...');
-    const youtube = await getYoutubeClient();
-    const info = await youtube.getInfo(videoId);
-
-    let transcriptData;
-    try {
-      transcriptData = await info.getTranscript();
-    } catch (innerErr) {
-      console.warn('Primary transcript extraction failed:', innerErr.message);
-      if (info.captions) {
-        transcriptData = await info.getTranscript();
-      }
-      if (!transcriptData) throw innerErr;
-    }
-
-    if (transcriptData && transcriptData.transcript?.content?.body?.initial_segments) {
-      console.log('✅ Strategy 2 success!');
-      const segments = transcriptData.transcript.content.body.initial_segments;
-      const text = segments.map(segment => segment.snippet.text).join(' ');
-      return {
-        text,
-        title: info.basic_info.title || `YouTube Video ${videoId}`,
-        duration: info.basic_info.duration || null,
+        title: videoTitle || `YouTube Video ${videoId}`,
+        duration: videoDuration,
         videoId,
       };
     }
   } catch (error) {
-    console.warn('❌ Strategy 2 failed:', error.message);
-    strategyErrors.push({ strategy: 2, error: error.message });
+    console.warn('❌ Strategy 1 failed:', error.message);
+    strategyErrors.push({ strategy: 1, error: error.message });
   }
 
-  // Strategy 3: ytdl-core + XML parsing
+  // Strategy 2: Direct timedtext API (reliable, no auth required)
   try {
-    console.log('📼 Strategy 3: Attempting ytdl-core extraction...');
-    const info = await ytdl.getInfo(`https://www.youtube.com/watch?v=${videoId}`, { agent: ytdlAgent });
-    const captions = info.player_response?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+    console.log('🔗 Strategy 2: Direct timedtext API...');
 
-    if (captions && captions.length > 0) {
-      const track = captions.find(t => t.languageCode === 'en') || captions[0];
-      const transcriptUrl = track.baseUrl;
+    // Get available caption tracks
+    const trackListUrl = `https://www.youtube.com/watch?v=${videoId}`;
+    const pageResponse = await axios.get(trackListUrl);
+    const pageHtml = pageResponse.data;
 
-      console.log(`Fetching transcript from: ${transcriptUrl}`);
-
-      let attempts = 0;
-      const maxAttempts = 3;
-      let xml = null;
-
-      const axiosConfig = {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        }
-      };
-
-      if (proxyUrl) {
-        const proxyAgent = new HttpsProxyAgent(proxyUrl);
-        axiosConfig.httpAgent = proxyAgent;
-        axiosConfig.httpsAgent = proxyAgent;
+    // If we don't have title yet, try to extract from page
+    if (!videoTitle) {
+      const titleMatch = pageHtml.match(/"title":"([^"]+)"/);
+      if (titleMatch) {
+        videoTitle = titleMatch[1].replace(/\\u0026/g, '&').replace(/\\'/g, "'");
+        console.log(`📝 Extracted title from page: ${videoTitle}`);
       }
+    }
 
-      while (attempts < maxAttempts) {
-        try {
-          const response = await axios.get(transcriptUrl, axiosConfig);
-          xml = response.data;
-          break;
-        } catch (err) {
-          attempts++;
-          console.warn(`Attempt ${attempts} failed: ${err.message}`);
-          if (attempts >= maxAttempts) throw err;
-          await new Promise(r => setTimeout(r, 1500 * attempts));
-        }
-      }
+    // Extract caption tracks from page
+    const captionsMatch = pageHtml.match(/"captionTracks":\s*(\[.*?\])/);
+    if (captionsMatch) {
+      const tracks = JSON.parse(captionsMatch[1]);
 
-      const cleanText = (str) => {
-        return str
-          .replace(/&amp;/g, '&')
-          .replace(/&lt;/g, '<')
-          .replace(/&gt;/g, '>')
-          .replace(/&quot;/g, '"')
-          .replace(/&#39;/g, "'");
-      };
+      // Prefer English, non-auto-generated
+      const englishTrack = tracks.find(t => t.languageCode === 'en' && !t.kind) ||
+        tracks.find(t => t.languageCode === 'en') ||
+        tracks[0];
 
-      if (xml) {
+      if (englishTrack && englishTrack.baseUrl) {
+        const transcriptResponse = await axios.get(englishTrack.baseUrl);
+        const xml = transcriptResponse.data;
+
+        // Parse XML
         const matches = [...xml.matchAll(/<text[^>]*>(.*?)<\/text>/g)];
-        const text = matches.map(m => cleanText(m[1])).join(' ');
+        const text = matches.map(m => {
+          return m[1]
+            .replace(/&amp;/g, '&')
+            .replace(/&lt;/g, '<')
+            .replace(/&gt;/g, '>')
+            .replace(/&quot;/g, '"')
+            .replace(/&#39;/g, "'");
+        }).join(' ');
 
-        if (text.length > 0) {
-          console.log('✅ Strategy 3 success!');
+        if (text.length > 100) {
+          console.log(`✅ Strategy 2 success! (${text.length} chars)`);
           return {
             text,
-            title: info.videoDetails.title || `YouTube Video ${videoId}`,
-            duration: info.videoDetails.lengthSeconds,
+            title: videoTitle || `YouTube Video ${videoId}`,
+            duration: videoDuration,
             videoId,
           };
         }
       }
     }
-    throw new Error('No captions found via ytdl-core');
+
+    throw new Error('No caption tracks found');
+  } catch (error) {
+    console.warn('❌ Strategy 2 failed:', error.message);
+    strategyErrors.push({ strategy: 2, error: error.message });
+  }
+
+  // Strategy 3: YouTube Data API v3 (Official)
+  try {
+    return await extractWithYouTubeAPI(videoId);
   } catch (error) {
     console.warn('❌ Strategy 3 failed:', error.message);
     strategyErrors.push({ strategy: 3, error: error.message });
   }
 
-  // Strategy 4: YouTube Data API v3 (Official)
+  // Strategy 3.5: Piped API (Public Instances) - Bypasses Server IP 429
+  // Piped instances proxy the request, so they don't use our server's IP
+  const pipedInstances = [
+    'https://pipedapi.kavin.rocks',
+    'https://api.piped.privacy.com.de',
+    'https://pipedapi.drgns.space',
+    'https://pipedapi.r4fo.com',
+    'https://api.piped.projectsegfau.lt'
+  ];
+
+  console.log('🛡️ Strategy 3.5: Attempting Piped API (public proxies)...');
+  for (const instance of pipedInstances) {
+    try {
+      const response = await axios.get(`${instance}/streams/${videoId}`, { timeout: 3000 });
+      const subtitles = response.data?.subtitles;
+
+      if (subtitles && subtitles.length > 0) {
+        // Prefer English
+        const track = subtitles.find(s => s.code === 'en') || subtitles[0];
+
+        if (track) {
+          console.log(`📡 Piped Instance hit: ${instance}`);
+          // Fetch the actual subtitle content
+          const textRes = await axios.get(track.url);
+          const rawText = textRes.data;
+
+          if (rawText) {
+            // Simple VTT cleanup
+            let text = rawText
+              .replace(/WEBVTT\n/g, '')
+              .replace(/(\d{2}:\d{2}:\d{2}\.\d{3} --> \d{2}:\d{2}:\d{2}\.\d{3})/g, '') // Remove timestamps
+              .replace(/<[^>]*>/g, '') // Remove HTML tags
+              .replace(/\n+/g, ' ') // Collapse newlines
+              .trim();
+
+            if (text.length > 50) {
+              console.log(`✅ Strategy 3.5 success! (${text.length} chars)`);
+              return {
+                text,
+                title: videoTitle || `YouTube Video ${videoId}`,
+                duration: videoDuration,
+                videoId,
+                source: 'piped'
+              };
+            }
+          }
+        }
+      }
+    } catch (e) {
+      // Continue to next instance
+    }
+  }
+  strategyErrors.push({ strategy: 3.5, error: 'All Piped instances failed' });
+
+  // Strategy 4: RapidAPI YouTube Transcripts (Paid Fallback)
   try {
-    return await extractWithYouTubeAPI(videoId);
+    console.log('💰 Strategy 4: Attempting RapidAPI (paid fallback)...');
+    const rapidAPIResult = await getTranscriptFromRapidAPI(videoId);
+
+    if (rapidAPIResult && rapidAPIResult.text) {
+      console.log(`✅ Strategy 4 success! (${rapidAPIResult.text.length} chars)`);
+
+      // Log quota usage
+      if (rapidAPIResult.quota) {
+        console.log(`📊 RapidAPI Quota: ${rapidAPIResult.quota.remaining}/${rapidAPIResult.quota.limit} remaining`);
+      }
+
+      return {
+        text: rapidAPIResult.text,
+        title: videoTitle || `YouTube Video ${videoId}`,
+        duration: videoDuration,
+        videoId,
+        source: 'rapidapi',
+      };
+    }
   } catch (error) {
     console.warn('❌ Strategy 4 failed:', error.message);
-    strategyErrors.push({ strategy: 4, error: error.message });
+    strategyErrors.push({ strategy: 5, error: error.message });
+
+    // Check if rate limited
+    if (error.message.includes('RATE_LIMITED')) {
+      console.error('🚨 RapidAPI quota exceeded!');
+    }
   }
 
   // All strategies failed - determine the most likely cause

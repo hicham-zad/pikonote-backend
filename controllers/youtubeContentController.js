@@ -50,6 +50,7 @@ export const generateContent = async (req, res) => {
             userId,
             title: title || `YouTube: ${videoId}`,
             type: 'youtube',
+            url: url, // Save YouTube URL for embedded player
             status: 'processing',
             progress: 0,
             difficulty,

@@ -16,13 +16,14 @@ const upload = multer({
     fileFilter: (req, file, cb) => {
         const allowedMimes = [
             'application/pdf',
-            'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document', // .docx
+            'application/vnd.openxmlformats-officedocument.presentationml.presentation' // .pptx
         ];
 
         if (allowedMimes.includes(file.mimetype)) {
             cb(null, true);
         } else {
-            cb(new Error('Only PDF and Word (.docx) files are allowed'), false);
+            cb(new Error('Only PDF, Word (.docx), and PowerPoint (.pptx) files are allowed'), false);
         }
     }
 });

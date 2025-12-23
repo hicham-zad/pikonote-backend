@@ -22,11 +22,14 @@ export const createTopic = async (req, res) => {
     const userId = req.user.id;
 
     // Validate input
-    if (!title || !type || !content) {
+    if (!type || !content) {
       return res.status(400).json({
-        error: 'Missing required fields: title, type, content'
+        error: 'Missing required fields: type, content'
       });
     }
+
+    // Default title if not provided
+    const topicTitle = title || 'Generating title...';
 
     // Validate type
     const validTypes = ['text', 'youtube', 'pdf', 'audio', 'image'];
@@ -80,7 +83,7 @@ export const createTopic = async (req, res) => {
     // 1. Create topic in DB with processing status
     const topic = await supabaseService.createTopic({
       userId,
-      title,
+      title: topicTitle,
       type,
       status: 'processing',
       progress: 0,
@@ -140,9 +143,50 @@ export const getTopic = async (req, res) => {
       return res.status(403).json({ error: 'Unauthorized' });
     }
 
+    // For YouTube topics without URL, try to get it from youtube_transcripts
+    let videoUrl = topic.url;
+    if (topic.type === 'youtube' && !videoUrl) {
+      try {
+        const { createClient } = await import('@supabase/supabase-js');
+        const supabase = createClient(
+          process.env.SUPABASE_URL,
+          process.env.SUPABASE_SERVICE_KEY
+        );
+
+        // Try to find a matching transcript by title
+        const { data: transcripts } = await supabase
+          .from('youtube_transcripts')
+          .select('video_url, video_id')
+          .eq('user_id', userId)
+          .order('created_at', { ascending: false })
+          .limit(50);
+
+        if (transcripts && transcripts.length > 0) {
+          // Try to match by title containing video_id or similar title
+          const matchingTranscript = transcripts.find(t =>
+            topic.title.includes(t.video_id) ||
+            topic.title.toLowerCase().includes('youtube')
+          );
+
+          if (matchingTranscript) {
+            videoUrl = matchingTranscript.video_url;
+          } else {
+            // Fallback: use most recent transcript if topic was created recently and title matches
+            const recentTranscript = transcripts[0];
+            if (recentTranscript) {
+              videoUrl = recentTranscript.video_url;
+            }
+          }
+        }
+      } catch (err) {
+        console.log('Could not lookup youtube transcript:', err.message);
+      }
+    }
+
     // Transform to match frontend expected shape
     const formattedTopic = {
       ...topic,
+      url: videoUrl, // Include video URL
       generationProgress: typeof topic.progress === 'number' ? topic.progress : 0,
       progress: topic.studyProgress || {
         flashcardsReviewed: 0,
