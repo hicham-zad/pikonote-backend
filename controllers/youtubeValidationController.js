@@ -1,8 +1,7 @@
 import supabase from '../config/supabase.js';
 
 /**
- * Validates a YouTube URL and extracts Video ID
- * This endpoint does NOT fetch anything from YouTube
+ * Validates a YouTube URL and extracts Video ID + metadata
  */
 export const validateUrl = async (req, res) => {
     try {
@@ -33,9 +32,32 @@ export const validateUrl = async (req, res) => {
             });
         }
 
+        // Fetch video metadata from YouTube's oembed API (no API key required)
+        let title = `YouTube Video ${videoId}`;
+        let thumbnail = `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`;
+        let duration = '';
+
+        try {
+            const oembedUrl = `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`;
+            const response = await fetch(oembedUrl, { timeout: 5000 });
+
+            if (response.ok) {
+                const data = await response.json();
+                title = data.title || title;
+                // oembed provides thumbnail_url
+                thumbnail = data.thumbnail_url || thumbnail;
+            }
+        } catch (metadataError) {
+            console.log('[YOUTUBE_VALIDATE] Metadata fetch failed, using defaults:', metadataError.message);
+            // Continue with default values
+        }
+
         res.json({
             valid: true,
             videoId,
+            title,
+            thumbnail,
+            duration,
             captionUrl: `https://www.youtube.com/api/timedtext?v=${videoId}&lang=en`
         });
 

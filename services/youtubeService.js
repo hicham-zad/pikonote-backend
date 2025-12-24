@@ -300,29 +300,33 @@ export const extractYouTubeTranscript = async (url, options = {}) => {
   let videoTitle = null;
   let videoDuration = null;
 
-  // Pre-flight availability check (optional but recommended)
+  // Pre-flight availability check (non-blocking - cloud IPs often get blocked)
   if (!skipPreflightCheck) {
     console.log('🔍 Running pre-flight availability check...');
-    const availability = await checkVideoAvailability(videoId);
+    try {
+      const availability = await checkVideoAvailability(videoId);
 
-    if (availability.error) {
-      console.warn(`❌ Pre-flight check failed: ${availability.error}`);
-      throw new TranscriptError(availability.error, null, {
-        videoId,
-        availability
-      });
+      if (availability.error) {
+        // Log but don't fail - cloud server IPs often get false positives
+        console.warn(`⚠️ Pre-flight check returned: ${availability.error}`);
+        console.log('🔄 Continuing with extraction strategies anyway (cloud IP may be blocked)...');
+      } else {
+        if (!availability.hasCaptions) {
+          console.warn('⚠️ No captions detected for this video');
+          // Don't fail yet - strategies might still work with auto-captions
+        }
+
+        // Store metadata for later use
+        videoTitle = availability.title;
+        videoDuration = availability.durationSeconds;
+
+        console.log(`✅ Pre-flight check passed: ${videoTitle || videoId}`);
+      }
+    } catch (preflightError) {
+      // Pre-flight failed completely - continue anyway
+      console.warn('⚠️ Pre-flight check failed:', preflightError.message);
+      console.log('🔄 Continuing with extraction strategies...');
     }
-
-    if (!availability.hasCaptions) {
-      console.warn('⚠️ No captions detected for this video');
-      // Don't fail yet - strategies might still work with auto-captions
-    }
-
-    // Store metadata for later use
-    videoTitle = availability.title;
-    videoDuration = availability.durationSeconds;
-
-    console.log(`✅ Pre-flight check passed: ${videoTitle || videoId}`);
   }
 
   // Setup Agents for YTDL
